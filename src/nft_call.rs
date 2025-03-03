@@ -21,7 +21,7 @@ pub fn transfer(
         access.static_call(
             &Call::new(),
             addr,
-            transferCall { recipient, id }.abi_encode()
+            &transferCall { recipient, id }.abi_encode()
         ),
         ErrNFTTransfer
     )?;

@@ -82,7 +82,7 @@ the amount paid. This way, we don't punish the first user for being first.
 
 ```mermaid
 flowchart LR
-    PayoutsVRFResp[Payouts (VRF response)]
+    PayoutsVRFResp["Payouts (VRF response)"]
     -->|"Notifies it's time for fee refunding."| FundingRefund[Funding refund]
     -->|Refunds user their flat portion of the VRF fee.| User((Buyer))
 ```

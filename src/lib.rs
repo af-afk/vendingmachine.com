@@ -52,6 +52,7 @@ impl StorageVendingMachine {
     // Lock up some tokens using ETH. Gets the amount from the amount
     // payable. This function is usable by anyone and begins the deposit user
     // story. Returns the ticket for the redeeming taken.
+    #[payable]
     pub fn lockup(&mut self, recipient: Address) -> Result<U256, Vec<u8>> {
         require!(!self.version.is_zero(), ErrNotSetup {});
         // Make sure someone doesn't supply a zero recipient address.
@@ -64,6 +65,7 @@ impl StorageVendingMachine {
         let value = self.vm().msg_value();
         // Someone has tried to supply us with 0 value!
         require!(value > U256::ZERO, ErrNoValue {});
+        require!(value <= MAX_U256_VALUE, ErrTooMuchValue {});
         // Prevent people from using this if there aren't any NFTs to distribute.
         let has_nfts = (0..self.levels.len())
             .find(|i| self.levels.get(*i).unwrap().nfts_distributeable.len() > 0)
@@ -111,9 +113,7 @@ impl StorageVendingMachine {
                 amount: value,
             },
         );
-        let mut t = self.queue.grow();
-        t.submitter.set(recipient);
-        t.eth_amt.set(value);
+        self.queue.grow().set(pack_queue_item(value, recipient));
         Ok(ticket_no)
     }
 

@@ -3191,6 +3191,7 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
+ "proptest",
  "rand_chacha 0.9.0",
  "stylus-sdk",
  "tiny-keccak",

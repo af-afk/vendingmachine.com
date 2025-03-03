@@ -13,6 +13,8 @@ interface IErrors {
 
     error ErrNoValue();
 
+    error ErrTooMuchValue();
+
     error ErrChainlinkVRF(bytes);
 
     error ErrChainlinkDecimals(bytes);
