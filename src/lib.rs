@@ -137,62 +137,79 @@ impl StorageVendingMachine {
         // This vending machine is slightly dangerous to use, because if there
         // aren't enough NFTs to distribute, it will return the user's
         // investment back.
-        'queue: for i_t in 0..self.queue.len() {
+        for i_t in 0..self.queue.len() {
             let (tic_eth_amt, tic_addr) = unpack_queue_item(self.queue.get(i_t).unwrap());
             let usd_invested = price * u96_to_u256(tic_eth_amt);
-            // To reduce the gas profile here, this code does a simple binary search.
-            // Once it finds a level item that could be used as the target, it scans
-            // right once, and if that item can't be purchased (or doesn't exist),
-            // then it assumes that. If not, it continues searching.
-            if let Some(level_i) = self.pick_level(usd_invested) {
-                let level = self.levels.getter(level_i).unwrap();
-                // Randomly pick a NFT to distribute. We know there will be one here due
-                // to the pick function. We need the position of the NFT in the vector so we
-                // can optionally pop it later.
-                let nft_addr_i = rng.next_u32() as usize % level.nfts_distributeable.len();
-                let nft_addr = level
-                    .nfts_distributeable
-                    .get(nft_addr_i)
-                    .unwrap();
-                // Pick the NFT id from the other vec, so that we can start to pop from this if we're done.
-                let nft_id = self
-                    .nft_ids_to_send
-                    .getter(nft_addr)
-                    .get(rng.next_u32() as usize % self.nft_ids_to_send.getter(nft_addr).len())
-                    .unwrap();
-                if let Ok(()) = nft_call::transfer(vm, nft_addr, tic_addr, nft_id) {
-                    // We're good. The NFT was sent correctly. Let's send them their rebate
-                    // if more than one user contributed to the queue by taking the fee amount,
-                    // then reducing it by the number of users multiplied by the amount.
-                    let fee_rebate = self.calc_fee_rebate()?;
-                    if !fee_rebate.is_zero() {
-                        // It's an issue if the contract does not have enough ETH to send this,
-                        // which means we have a bug. But what could also happen here is that the
-                        // user has a payable function, and they break on receiving the amount.
-                        // If this is the case, we just continue as-is.
-                        //let _ = eth::send(tic_addr, fee_rebate);
-                    }
-                    // We need to pop that we spent this NFT id!
-                    {
-                        let mut ids = self.nft_ids_to_send.get(nft_addr);
-                        let last_id = self.nft_ids_to_send.get(nft_addr).get(self.nft_ids_to_send.len()-1).unwrap();
-                        let mut ids = self.nft_ids_to_send.setter(nft_addr);
-                        ids.setter(nft_id).unwrap().set(last_id);
-                        ids.pop();
-                    }
-                    // Was that the last NFT that we spent id that we spent from this NFT?
-                    // We need to pop from it.
-                    if self.nft_ids_to_send.get(nft_addr).is_empty() {
-                        let level_nfts_len = self.levels.get(level_i).unwrap().nfts_distributeable.len();
-                        let last_nft_addr = self.levels.getter(level_i).unwrap().nfts_distributeable.get(level_nfts_len - 1).unwrap();
-                        let mut level = self.levels.setter(level_i).unwrap();
-                        level.nfts_distributeable.setter(nft_addr_i).unwrap().set(last_nft_addr);
-                        level.nfts_distributeable.pop();
-                    }
-                }
+            // This code does a simple binary search. Once it finds a level item that
+            // could be used as the target, it scans right once, and if that item
+            // can't be purchased (or doesn't exist), then it assumes that. If not,
+            // it continues searching.
+            let level_i = self.pick_level(usd_invested);
+            if level_i.is_none() {
+                // We couldn't find a suitable level for this user! We need to refund their amount.
+                unimplemented!()
             }
-            // Looks like the user wasn't able to get a NFT. We need to send them
-            // back their initial investment minus the fee.
+            let level_i = level_i.unwrap();
+            let level = self.levels.getter(level_i).unwrap();
+            // Randomly pick a NFT to distribute. We know there will be one here due
+            // to the pick function. We need the position of the NFT in the vector so we
+            // can optionally pop it later.
+            let nft_addr_i = rng.next_u32() as usize % level.nfts_distributeable.len();
+            let nft_addr = level.nfts_distributeable.get(nft_addr_i).unwrap();
+            // Pick the NFT id from the other vec, so that we can start to pop from this if we're done.
+            let nft_id = self
+                .nft_ids_to_send
+                .getter(nft_addr)
+                .get(rng.next_u32() as usize % self.nft_ids_to_send.getter(nft_addr).len())
+                .unwrap();
+            if let Err(_) = nft_call::transfer(vm, nft_addr, tic_addr, nft_id) {
+                // Looks like the user wasn't able to get a NFT. We need to send them
+                // back their initial investment minus the fee.
+                unimplemented!()
+            }
+            // We're good. The NFT was sent correctly. Let's send them their rebate
+            // if more than one user contributed to the queue by taking the fee amount,
+            // then reducing it by the number of users multiplied by the amount.
+            let fee_rebate = self.calc_fee_rebate()?;
+            if !fee_rebate.is_zero() {
+                // It's an issue if the contract does not have enough ETH to send this,
+                // which means we have a bug. But what could also happen here is that the
+                // user has a payable function, and they break on receiving the amount.
+                // If this is the case, we just continue as-is.
+                //let _ = eth::send(tic_addr, fee_rebate);
+            }
+            // We need to pop that we spent this NFT id!
+            {
+                // Get the last item in the NFT ids to send to pop with.
+                let last_id = self
+                    .nft_ids_to_send
+                    .get(nft_addr)
+                    .get(self.nft_ids_to_send.get(nft_addr).len() - 1)
+                    .unwrap();
+                let mut ids = self.nft_ids_to_send.setter(nft_addr);
+                ids.setter(nft_id).unwrap().set(last_id);
+                ids.pop();
+            }
+            // Was that the last NFT that we spent id that we spent from this NFT?
+            // We need to pop from it.
+            if self.nft_ids_to_send.get(nft_addr).is_empty() {
+                let level_nfts_len =
+                    self.levels.get(level_i).unwrap().nfts_distributeable.len();
+                let last_nft_addr = self
+                    .levels
+                    .getter(level_i)
+                    .unwrap()
+                    .nfts_distributeable
+                    .get(level_nfts_len - 1)
+                    .unwrap();
+                let mut level = self.levels.setter(level_i).unwrap();
+                level
+                    .nfts_distributeable
+                    .setter(nft_addr_i)
+                    .unwrap()
+                    .set(last_nft_addr);
+                level.nfts_distributeable.pop();
+            }
         }
         Ok(())
     }
