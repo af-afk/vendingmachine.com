@@ -4,13 +4,6 @@ use stylus_sdk::{
     storage::*,
 };
 
-/// A NFT that can be distributed, including the amount of the NFT outstanding.
-#[storage]
-pub struct StorageNFTDistributable {
-    pub address: StorageAddress,
-    pub to_send_ids: StorageVec<StorageU256>,
-}
-
 #[storage]
 pub struct StorageLevel {
     // The USD amount that's the minimum to participate in owning a NFT
@@ -18,11 +11,7 @@ pub struct StorageLevel {
     pub usd_min: StorageU256,
 
     // NFTs ready to be distributed, and what's left.
-    pub nfts_distributeable: StorageVec<StorageU32>,
-
-    // These are NFTs keyed to the contract, able to be moved around if the
-    // vector has its direction changed.
-    pub nfts: StorageMap<U32, StorageNFTDistributable>,
+    pub nfts_distributeable: StorageVec<StorageAddress>,
 }
 
 #[entrypoint]
@@ -51,6 +40,9 @@ pub struct StorageVendingMachine {
     // Levels that can be used to distribute with. The lowest amount first.
     // Finding the tranche to distribute with is done with binary search.
     pub levels: StorageVec<StorageLevel>,
+
+    // NFT ids to send based on a NFT address.
+    pub nft_ids_to_send: StorageMap<Address, StorageVec<StorageU256>>
 }
 
 pub fn unpack_queue_item(x: U256) -> (U96, Address) {

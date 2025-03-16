@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.20;
 
-interface IVendingMachine as IErrors {
+import "./IErrors.sol";
+
+interface IVendingMachine is IErrors {
     function lockup(address recipient) external payable returns (uint256 ticketNo);
 
     /**
