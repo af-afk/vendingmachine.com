@@ -7,16 +7,8 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use libvendingmachine::*;
 
 fn crit_pick_levels(crit: &mut Criterion) {
-    let mut c = unsafe {
-        StorageVendingMachine::new(
-            U256::ZERO,
-            0,
-            VM {
-                host: Box::new(TestVM::new()),
-            },
-        )
-    };
     // Simple benchmarking test without accommodating different ranges of NFT levels.
+    let mut c = StorageVendingMachine::default();
     let max = 1_000_000;
     for i in 0..max {
         let mut l = c.levels.grow();

@@ -14,8 +14,9 @@ mod calldata;
 mod utils;
 use utils::*;
 
-mod chainlink_price_call;
+pub mod chainlink_price_call;
 mod chainlink_vrf_call;
+mod eth;
 mod nft_call;
 
 mod immutables;
@@ -36,16 +37,54 @@ use core::cmp::Ordering;
 sol!("./src/IEvents.sol");
 use IEvents::*;
 
-macro_rules! require {
-    ($cond:expr, $err:expr) => {
-        if !($cond) {
-            Err($err.abi_encode())?;
-        }
-    };
-}
-
 #[public]
 impl StorageVendingMachine {
+    pub fn setup(
+        &mut self,
+        submitters: Vec<Address>,
+        mut usd_levels: Vec<U256>,
+    ) -> Result<(), Vec<u8>> {
+        require!(self.version.is_zero(), ErrAlreadySetup {});
+        self.version.set(U256::from(1));
+        for s in submitters {
+            self.submitters.setter(s).set(true);
+        }
+        usd_levels.sort();
+        usd_levels.dedup();
+        for u in usd_levels {
+            let mut l = self.levels.grow();
+            l.usd_min.set(u);
+        }
+        Ok(())
+    }
+
+    // Add a NFT to the list by first searching for the level to add it to,
+    // then add it to the list of tokens for that NFT at that usd_min amount.
+    pub fn add_nft(&mut self, addr: Address, usd_min_ask: U256, id: U256) -> Result<U256, Vec<u8>> {
+        require!(
+            self.submitters.get(self.vm().msg_sender()),
+            ErrNotSubmitter {}
+        );
+        // Add a NFT at the best price point given relatively.
+        let level_i = self
+            .pick_level(usd_min_ask, false)
+            .ok_or(ErrNoLevel {}.abi_encode())?;
+        let mut level = self.levels.setter(level_i).unwrap();
+        let chosen_usd_min = level.usd_min.get();
+        level.nfts_distributeable.push(addr);
+        self.nft_ids_to_send.setter(addr).setter(level_i).push(id);
+        let msg_sender = self.vm().msg_sender();
+        let contract = self.vm().contract_address();
+        nft_call::transfer_from(self.vm(), addr, msg_sender, contract, id)?;
+        Ok(chosen_usd_min)
+    }
+
+    pub fn add_nfts(&mut self, nfts: Vec<(Address, U256, U256)>) -> Result<Vec<U256>, Vec<u8>> {
+        nfts.into_iter()
+            .map(|(addr, usd_min, id)| self.add_nft(addr, usd_min, id))
+            .collect::<Result<Vec<_>, _>>()
+    }
+
     // Lock up some tokens using ETH. Gets the amount from the amount
     // payable. This function is usable by anyone and begins the deposit user
     // story. Returns the ticket for the redeeming taken.
@@ -118,10 +157,13 @@ impl StorageVendingMachine {
     // random VRF words.
     pub fn raw_fulfill_random_words(
         &mut self,
-        ticket: U256,
+        ticket_no: U256,
         words: Vec<U256>,
     ) -> Result<(), Vec<u8>> {
-        let vm = self.vm();
+        require!(
+            CHAINLINK_PRICE_ADDR == self.vm().msg_sender(),
+            ErrNotChainlink {}
+        );
         // At this point, we need to start to refund the users that're in the
         // queue from the balance of the tokens we've received, and start to
         // pick the NFTs that were supplied to this contract. We use the
@@ -144,25 +186,40 @@ impl StorageVendingMachine {
             // could be used as the target, it scans right once, and if that item
             // can't be purchased (or doesn't exist), then it assumes that. If not,
             // it continues searching.
-            let level_i = self.pick_level(usd_invested);
+            let level_i = self.pick_level(usd_invested, true);
             if level_i.is_none() {
                 // We couldn't find a suitable level for this user! We need to refund their amount.
                 unimplemented!()
             }
             let level_i = level_i.unwrap();
-            let level = self.levels.getter(level_i).unwrap();
             // Randomly pick a NFT to distribute. We know there will be one here due
             // to the pick function. We need the position of the NFT in the vector so we
             // can optionally pop it later.
-            let nft_addr_i = rng.next_u32() as usize % level.nfts_distributeable.len();
-            let nft_addr = level.nfts_distributeable.get(nft_addr_i).unwrap();
+            let nft_addr_i = rng.next_u32() as usize
+                % self
+                    .levels
+                    .getter(level_i)
+                    .unwrap()
+                    .nfts_distributeable
+                    .len();
+            let nft_addr = self
+                .levels
+                .getter(level_i)
+                .unwrap()
+                .nfts_distributeable
+                .get(nft_addr_i)
+                .unwrap();
             // Pick the NFT id from the other vec, so that we can start to pop from this if we're done.
             let nft_id = self
                 .nft_ids_to_send
                 .getter(nft_addr)
-                .get(rng.next_u32() as usize % self.nft_ids_to_send.getter(nft_addr).len())
+                .get(
+                    rng.next_u32() as usize
+                        % self.nft_ids_to_send.getter(nft_addr).getter(level_i).len(),
+                )
+                .get(level_i)
                 .unwrap();
-            if let Err(_) = nft_call::transfer(vm, nft_addr, tic_addr, nft_id) {
+            if let Err(_) = nft_call::transfer(self.vm(), nft_addr, tic_addr, nft_id) {
                 // Looks like the user wasn't able to get a NFT. We need to send them
                 // back their initial investment minus the fee.
                 unimplemented!()
@@ -176,25 +233,26 @@ impl StorageVendingMachine {
                 // which means we have a bug. But what could also happen here is that the
                 // user has a payable function, and they break on receiving the amount.
                 // If this is the case, we just continue as-is.
-                //let _ = eth::send(tic_addr, fee_rebate);
+                let _ = eth::transfer(self.vm(), tic_addr, fee_rebate);
             }
             // We need to pop that we spent this NFT id!
             {
-                // Get the last item in the NFT ids to send to pop with.
+                // Get the last item in the ids.
                 let last_id = self
                     .nft_ids_to_send
                     .get(nft_addr)
-                    .get(self.nft_ids_to_send.get(nft_addr).len() - 1)
+                    .get(self.nft_ids_to_send.get(nft_addr).get(level_i).len() - 1)
+                    .get(level_i)
                     .unwrap();
-                let mut ids = self.nft_ids_to_send.setter(nft_addr);
+                let mut nfts = self.nft_ids_to_send.setter(nft_addr);
+                let mut ids = nfts.setter(level_i);
                 ids.setter(nft_id).unwrap().set(last_id);
                 ids.pop();
             }
             // Was that the last NFT that we spent id that we spent from this NFT?
             // We need to pop from it.
-            if self.nft_ids_to_send.get(nft_addr).is_empty() {
-                let level_nfts_len =
-                    self.levels.get(level_i).unwrap().nfts_distributeable.len();
+            if self.nft_ids_to_send.get(nft_addr).get(level_i).is_empty() {
+                let level_nfts_len = self.levels.get(level_i).unwrap().nfts_distributeable.len();
                 let last_nft_addr = self
                     .levels
                     .getter(level_i)
@@ -210,7 +268,26 @@ impl StorageVendingMachine {
                     .set(last_nft_addr);
                 level.nfts_distributeable.pop();
             }
+            stylus_core::log(
+                self.vm(),
+                UserReceivedNFT {
+                    nft: nft_addr,
+                    id: nft_id,
+                    usdAmount: usd_invested,
+                    refunded: fee_rebate,
+                    recipient: tic_addr,
+                },
+            );
         }
+        // We sent the queue! Time to zero out the queue from before.
+        unsafe { self.queue.set_len(0) }
+        self.chainlink_vrf_pending.set(false);
+        stylus_core::log(
+            self.vm(),
+            RandomnessResolved {
+                ticketNo: ticket_no,
+            },
+        );
         Ok(())
     }
 
@@ -236,7 +313,7 @@ impl StorageVendingMachine {
     // Pick an initial NFT level using a very simple binary search where the
     // rightmost element following the current element that meets the minimum
     // must be unable to be sent to be successful.
-    pub fn pick_level(&self, usd_amt: U256) -> Option<usize> {
+    pub fn pick_level(&self, usd_amt: U256, find_spendable: bool) -> Option<usize> {
         let nft = (0..self.levels.len())
             .collect::<Vec<_>>()
             .binary_search_by(|i| {
@@ -257,9 +334,13 @@ impl StorageVendingMachine {
                 }
             })
             .ok()?;
-        (0..=nft)
-            .rev()
-            .find(|i| self.levels.get(*i).unwrap().nfts_distributeable.len() > 0)
+        if find_spendable {
+            (0..=nft)
+                .rev()
+                .find(|i| self.levels.get(*i).unwrap().nfts_distributeable.len() > 0)
+        } else {
+            Some(nft)
+        }
     }
 
     // Pick an initial NFT level using a very simple binary search where the
@@ -303,7 +384,6 @@ impl StorageVendingMachine {
 mod test {
     use super::*;
     use proptest::prelude::*;
-    use stylus_sdk::{host::VM, testing::vm::TestVM};
 
     proptest! {
         #[test]
@@ -312,14 +392,13 @@ mod test {
             mut items in proptest::collection::vec((any::<u64>(), 0u64..10), 1000)
         ) {
             items.sort_by(|(x, _), (y, _)| x.cmp(y));
-            let host = VM{host:Box::new(TestVM::new())};
-            let mut c = unsafe { StorageVendingMachine::new(U256::ZERO, 0, host) };
+            let mut c = StorageVendingMachine::default();
             let addr = Address::from([1u8; 20]);
-            for i in 0..10 {
-                c.nft_ids_to_send.setter(addr).setter(i).unwrap().set(U256::from(i));
-            }
-            for (usd_min, nfts_distributeable) in items.iter() {
+            for (i, (usd_min, nfts_distributeable)) in items.iter().enumerate() {
                 let mut l = c.levels.grow();
+            for x in 0..10 {
+                c.nft_ids_to_send.setter(addr).setter(i).grow().set(U256::from(x));
+            }
                 l.usd_min.set(U256::from(*usd_min));
                 for _ in 0..*nfts_distributeable {
                     l.nfts_distributeable.grow().set(addr);
@@ -328,16 +407,20 @@ mod test {
             let usd_amt = U256::from(items.get(nft_i).unwrap().0);
             let nft_i =
                 (0..=nft_i).rev().find(|i| c.levels.get(*i).unwrap().nfts_distributeable.len() > 0);
-            assert_eq!(nft_i, c.pick_level(usd_amt));
-        }
-
-        #[test]
-        fn test_fee_rebate_calc(_deposits in any::<u64>()) {
-            let host = VM{host:Box::new(TestVM::new())};
-            let mut c = unsafe { StorageVendingMachine::new(U256::ZERO, 0, host) };
-            unimplemented!()
+            assert_eq!(nft_i, c.pick_level(usd_amt, true));
         }
     }
+}
+
+#[test]
+fn test_fee_rebate_calc() {
+    let mut c = StorageVendingMachine::default();
+    c.chainlink_vrf_fee.set(U256::from(1e18 as u64));
+    for _ in 0..500 {
+        c.queue
+            .push(pack_queue_item(U256::from(100), Address::ZERO));
+    }
+    assert_eq!(U256::from(998e15), c.calc_fee_rebate().unwrap());
 }
 
 #[no_mangle]

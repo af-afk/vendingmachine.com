@@ -3416,6 +3416,7 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
+ "const-hex",
  "criterion",
  "proptest",
  "rand_chacha 0.9.0",

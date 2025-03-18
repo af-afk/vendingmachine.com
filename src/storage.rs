@@ -41,8 +41,29 @@ pub struct StorageVendingMachine {
     // Finding the tranche to distribute with is done with binary search.
     pub levels: StorageVec<StorageLevel>,
 
-    // NFT ids to send based on a NFT address.
-    pub nft_ids_to_send: StorageMap<Address, StorageVec<StorageU256>>
+    // NFT ids to send, keyed by the address of the NFT, and the level to do
+    // the distribution with. We don't use word packing here in favour of a
+    // multidimensional array, since a NFT might use the entire U256 word
+    // (ie, to encode a URI in some lazy creation instances), so we can't pack
+    // this. Keyed by usize (32 bit word in the wasm world).
+    pub nft_ids_to_send: StorageMap<Address, StorageMap<usize, StorageVec<StorageU256>>>,
+}
+
+// Default for testing purposes.
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for StorageVendingMachine {
+    fn default() -> Self {
+        use stylus_sdk::{host::VM, testing::vm::TestVM};
+        unsafe {
+            StorageVendingMachine::new(
+                U256::ZERO,
+                0,
+                VM {
+                    host: Box::new(TestVM::new()),
+                },
+            )
+        }
+    }
 }
 
 pub fn unpack_queue_item(x: U256) -> (U96, Address) {

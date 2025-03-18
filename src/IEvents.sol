@@ -10,4 +10,16 @@ interface IEvents {
     );
 
     event RandomnessRequested(uint256 indexed ticketNo);
+
+    event RandomnessResolved(uint256 indexed ticketNo);
+
+    event UserReceivedNFT(
+        address indexed nft,
+        uint256 indexed id,
+        uint256 indexed usdAmount,
+        uint256 refunded,
+        address recipient
+    );
+
+    event UserRebated(address indexed user, uint256 indexed amount);
 }

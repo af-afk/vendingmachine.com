@@ -1,6 +1,6 @@
 use stylus_sdk::{
-    alloy_primitives::{Address, I256, U256},
-    alloy_sol_types::{sol, SolCall, SolError},
+    alloy_primitives::{Address, U256},
+    alloy_sol_types::{sol, SolCall},
     stylus_core::calls::{context::Call, CallAccess},
 };
 
@@ -18,10 +18,28 @@ pub fn transfer(
     id: U256,
 ) -> Result<(), Vec<u8>> {
     unpack_on_err!(
-        access.static_call(
+        access.call(
             &Call::new(),
             addr,
             &transferCall { recipient, id }.abi_encode()
+        ),
+        ErrNFTTransfer
+    )?;
+    Ok(())
+}
+
+pub fn transfer_from(
+    access: &dyn CallAccess,
+    addr: Address,
+    sender: Address,
+    recipient: Address,
+    id: U256,
+) -> Result<(), Vec<u8>> {
+    unpack_on_err!(
+        access.call(
+            &Call::new(),
+            addr,
+            &transferFromCall { sender, recipient, id }.abi_encode()
         ),
         ErrNFTTransfer
     )?;

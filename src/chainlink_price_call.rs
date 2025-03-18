@@ -20,21 +20,23 @@ pub fn decimals(access: &dyn CallAccess, addr: Address) -> Result<u8, Vec<u8>> {
     .ok_or(ErrUnpackU8 {}.abi_encode())
 }
 
+fn decode_round_data(d: Vec<u8>) -> Result<I256, Vec<u8>> {
+    Ok(
+        AggregatorV3Interface::latestRoundDataCall::abi_decode_returns(&d, true)
+            .map_err(|_| IErrors::ErrChainlinkRoundUnpack {}.abi_encode())?
+            .answer,
+    )
+}
+
 pub fn latest_round_data_price(access: &dyn CallAccess, addr: Address) -> Result<I256, Vec<u8>> {
-    let d = unpack_on_err!(
+    decode_round_data(unpack_on_err!(
         access.static_call(
             &Call::new(),
             addr,
             &AggregatorV3Interface::latestRoundDataCall {}.abi_encode()
         ),
         ErrChainlinkRound
-    )?;
-    if d.len() != 32 * 5 {
-        return Err(ErrChainlinkRoundUnpack { _0: d.into() }.abi_encode());
-    }
-    Ok(I256::from_le_bytes::<32>(d[32..64].try_into().map_err(
-        |_| ErrChainlinkRoundUnpack { _0: d.into() }.abi_encode(),
-    )?))
+    )?)
 }
 
 // Get the latest round price data by combining the decimals, and the

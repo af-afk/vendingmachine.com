@@ -2,6 +2,8 @@
 pragma solidity 0.8.20;
 
 interface IErrors {
+    error ErrAlreadySetup();
+
     error ErrNotSetup();
 
     // There are no NFTs in the level/contract to distribute!
@@ -21,7 +23,7 @@ interface IErrors {
 
     error ErrChainlinkRound(bytes);
 
-    error ErrChainlinkRoundUnpack(bytes);
+    error ErrChainlinkRoundUnpack();
 
     error ErrUnpackU8();
 
@@ -32,4 +34,12 @@ interface IErrors {
     error ErrCheckedMul();
 
     error ErrNFTTransfer(bytes);
+
+    error ErrEthTransfer(bytes);
+
+    error ErrNoLevel();
+
+    error ErrNotSubmitter();
+
+    error ErrNotChainlink();
 }
