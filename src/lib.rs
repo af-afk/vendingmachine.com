@@ -153,6 +153,17 @@ impl StorageVendingMachine {
         Ok(ticket_no)
     }
 
+    #[allow(non_snake_case)]
+    pub fn on_E_R_C_721_Received(
+        &self,
+        _operator: Address,
+        _from: Address,
+        _token_id: U256,
+        _calldata: stylus_sdk::abi::Bytes,
+    ) -> Result<FixedBytes<4>, Vec<u8>> {
+        Ok(FixedBytes::<4>::from([0x15, 0x0b, 0x7a, 0x02]))
+    }
+
     // Called by the Chainlink VRF coordinator once we've received the
     // random VRF words.
     pub fn raw_fulfill_random_words(
