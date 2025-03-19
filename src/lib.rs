@@ -58,8 +58,8 @@ impl StorageVendingMachine {
         Ok(())
     }
 
-    // Add a NFT to the list by first searching for the level to add it to,
-    // then add it to the list of tokens for that NFT at that usd_min amount.
+    /// Add a NFT to the list by first searching for the level to add it to,
+    /// then add it to the list of tokens for that NFT at that usd_min amount.
     pub fn add_nft(&mut self, addr: Address, usd_min_ask: U256, id: U256) -> Result<U256, Vec<u8>> {
         require!(
             self.submitters.get(self.vm().msg_sender()),
@@ -79,15 +79,16 @@ impl StorageVendingMachine {
         Ok(chosen_usd_min)
     }
 
+    /// Convinient and gas efficient shortform function to add multiple NFTs.
     pub fn add_nfts(&mut self, nfts: Vec<(Address, U256, U256)>) -> Result<Vec<U256>, Vec<u8>> {
         nfts.into_iter()
             .map(|(addr, usd_min, id)| self.add_nft(addr, usd_min, id))
             .collect::<Result<Vec<_>, _>>()
     }
 
-    // Lock up some tokens using ETH. Gets the amount from the amount
-    // payable. This function is usable by anyone and begins the deposit user
-    // story. Returns the ticket for the redeeming taken.
+    /// Lock up some tokens using ETH. Gets the amount from the amount
+    /// payable. This function is usable by anyone and begins the deposit user
+    /// story. Returns the ticket for the redeeming taken.
     #[payable]
     pub fn lockup(&mut self, recipient: Address) -> Result<U256, Vec<u8>> {
         require!(!self.version.is_zero(), ErrNotSetup {});
@@ -149,7 +150,7 @@ impl StorageVendingMachine {
                 amount: value,
             },
         );
-        self.queue.grow().set(pack_queue_item(value, recipient));
+        self.queue.push(pack_queue_item(value, recipient));
         Ok(ticket_no)
     }
 
@@ -164,8 +165,8 @@ impl StorageVendingMachine {
         Ok(FixedBytes::<4>::from([0x15, 0x0b, 0x7a, 0x02]))
     }
 
-    // Called by the Chainlink VRF coordinator once we've received the
-    // random VRF words.
+    /// Called by the Chainlink VRF coordinator once we've received the
+    /// random VRF words.
     pub fn raw_fulfill_random_words(
         &mut self,
         ticket_no: U256,
@@ -189,10 +190,12 @@ impl StorageVendingMachine {
         let price = chainlink_price_call::get_price(self.vm(), CHAINLINK_PRICE_ADDR)?;
         // This vending machine is slightly dangerous to use, because if there
         // aren't enough NFTs to distribute, it will return the user's
-        // investment back.
+        // investment back. We need this fee rebate to always return this.
+        let fee_rebate = self.calc_fee_rebate()?;
         for i_t in 0..self.queue.len() {
             let (tic_eth_amt, tic_addr) = unpack_queue_item(self.queue.get(i_t).unwrap());
-            let usd_invested = price * u96_to_u256(tic_eth_amt);
+            let tic_eth_amt = u96_to_u256(tic_eth_amt);
+            let usd_invested = price * tic_eth_amt;
             // This code does a simple binary search. Once it finds a level item that
             // could be used as the target, it scans right once, and if that item
             // can't be purchased (or doesn't exist), then it assumes that. If not,
@@ -200,7 +203,8 @@ impl StorageVendingMachine {
             let level_i = self.pick_level(usd_invested, true);
             if level_i.is_none() {
                 // We couldn't find a suitable level for this user! We need to refund their amount.
-                unimplemented!()
+                let _ = self.trigger_refund(tic_addr, tic_eth_amt, fee_rebate);
+                continue;
             }
             let level_i = level_i.unwrap();
             // Randomly pick a NFT to distribute. We know there will be one here due
@@ -233,12 +237,10 @@ impl StorageVendingMachine {
             if let Err(_) = nft_call::transfer(self.vm(), nft_addr, tic_addr, nft_id) {
                 // Looks like the user wasn't able to get a NFT. We need to send them
                 // back their initial investment minus the fee.
-                unimplemented!()
+                let _ = self.trigger_refund(tic_addr, tic_eth_amt, fee_rebate);
+                continue;
             }
-            // We're good. The NFT was sent correctly. Let's send them their rebate
-            // if more than one user contributed to the queue by taking the fee amount,
-            // then reducing it by the number of users multiplied by the amount.
-            let fee_rebate = self.calc_fee_rebate()?;
+            // We're good. The NFT was sent correctly. Let's send them their share of the fee rebate.
             if !fee_rebate.is_zero() {
                 // It's an issue if the contract does not have enough ETH to send this,
                 // which means we have a bug. But what could also happen here is that the
@@ -321,9 +323,30 @@ impl StorageVendingMachine {
 }
 
 impl StorageVendingMachine {
-    // Pick an initial NFT level using a very simple binary search where the
-    // rightmost element following the current element that meets the minimum
-    // must be unable to be sent to be successful.
+    /// Refund a user by sending them the amount they gave the contract, and
+    /// a portion of their fee deposit.
+    pub fn trigger_refund(
+        &self,
+        recipient: Address,
+        eth_amt: U256,
+        fee_rebate: U256,
+    ) -> Result<(), Vec<u8>> {
+        let r = eth_amt + fee_rebate;
+        eth::transfer(self.vm(), recipient, r)?;
+        stylus_core::log(
+            self.vm(),
+            UserRefunded {
+                user: recipient,
+                amount: r,
+                rebate: fee_rebate,
+            },
+        );
+        Ok(())
+    }
+
+    /// Pick an initial NFT level using a very simple binary search where the
+    /// rightmost element following the current element that meets the minimum
+    /// must be unable to be sent to be successful.
     pub fn pick_level(&self, usd_amt: U256, find_spendable: bool) -> Option<usize> {
         let nft = (0..self.levels.len())
             .collect::<Vec<_>>()
@@ -354,13 +377,13 @@ impl StorageVendingMachine {
         }
     }
 
-    // Pick an initial NFT level using a very simple binary search where the
-    // rightmost element following the current element that meets the minimum
-    // must be unable to be sent to be successful. It's possible to probably
-    // optimise this further since we know the rightmost element is not
-    // appropriate for us, though with Stylus caching, we can afford to be
-    // succinct here and avoid supporting that case. Though, I wonder to what
-    // extent that's true.
+    /// Pick an initial NFT level using a very simple binary search where the
+    /// rightmost element following the current element that meets the minimum
+    /// must be unable to be sent to be successful. It's possible to probably
+    /// optimise this further since we know the rightmost element is not
+    /// appropriate for us, though with Stylus caching, we can afford to be
+    /// succinct here and avoid supporting that case. Though, I wonder to what
+    /// extent that's true.
     pub fn pick_level_manual(&self, usd_amt: U256) -> Option<usize> {
         let mut left = 0;
         let mut right = self.levels.len() as isize - 1;

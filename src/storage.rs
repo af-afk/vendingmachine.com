@@ -53,16 +53,8 @@ pub struct StorageVendingMachine {
 #[cfg(not(target_arch = "wasm32"))]
 impl Default for StorageVendingMachine {
     fn default() -> Self {
-        use stylus_sdk::{host::VM, testing::vm::TestVM};
-        unsafe {
-            StorageVendingMachine::new(
-                U256::ZERO,
-                0,
-                VM {
-                    host: Box::new(TestVM::new()),
-                },
-            )
-        }
+        use stylus_sdk::testing::vm::TestVM;
+        StorageVendingMachine::from(&TestVM::new())
     }
 }
 

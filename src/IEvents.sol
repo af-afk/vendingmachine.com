@@ -20,6 +20,12 @@ interface IEvents {
         uint256 refunded,
         address recipient
     );
+    
+    event UserRefunded(
+        address indexed user,
+        uint256 indexed amount,
+        uint256 indexed rebate
+    );
 
     event UserRebated(address indexed user, uint256 indexed amount);
 }

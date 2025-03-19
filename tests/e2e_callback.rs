@@ -59,6 +59,11 @@ proptest! {
         }
         c.add_nfts(nfts).unwrap();
         vm.set_sender(CHAINLINK_VRF_ADDR);
+        let saruul_addr = Address::from([1u8; 20]);
+        let annie_addr = Address::from([2u8; 20]);
+        vm.set_value(U256::from(1000));
+        c.lockup(saruul_addr).unwrap();
+        vm.set_value(U256::from(2000));
         c.raw_fulfill_random_words(U256::ZERO, vec![rng_word]).unwrap();
         dbg!(vm.get_emitted_logs());
     }
